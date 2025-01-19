@@ -424,4 +424,249 @@ This structure is designed to be a solid, long-term solution for your projects. 
 
 
 
+Okay, let's break this down into steps. You want to:
+
+1.  **List C++ files in a directory:** Create an API endpoint that reads a directory on your macOS system and returns a list of C++ file paths (or names).
+2.  **Send the data to SvelteKit:** The SvelteKit app will call this endpoint and display the file list.
+
+We'll focus on the backend first, then provide the SvelteKit code.
+
+**Backend Changes (Python FastAPI):**
+
+**1. Update `backend/app/api/v1/code.py`:**
+
+```python
+from fastapi import APIRouter, HTTPException
+from typing import List
+from app.modules.code import core as code_core
+from app.schemas import code as code_schemas
+from app.utils import utils
+
+router = APIRouter()
+
+
+@router.get("/explain")
+async def explain_code():
+    return {"message": "Explain code"}
+
+
+@router.post("/search")
+async def search_code():
+    return {"message": "Search code"}
+
+
+@router.post("/list-files", response_model=code_schemas.FileListResponse)
+async def list_code_files(request_body: code_schemas.FileListRequest):
+    """
+    Lists C++ files in the given directory.
+
+    Returns:
+         A list of C++ file paths.
+    """
+    try:
+        if not utils.is_valid_directory(request_body.directory):
+          raise HTTPException(status_code=400, detail="Invalid directory path.")
+        files = code_core.list_cpp_files(request_body.directory)
+        return {"files": files}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+```
+
+**Explanation:**
+
+*   **Imports:** Import the necessary modules
+*   **`@router.post("/list-files", response_model=code_schemas.FileListResponse)`**:
+    *   Defines a new API route using POST `"/list-files"`
+    *   `response_model=code_schemas.FileListResponse`: Specifies the output schema.
+
+*   **`async def list_code_files(request_body: code_schemas.FileListRequest)`**:
+    *   Defines an async function.
+    *   `request_body: code_schemas.FileListRequest`: Takes request body and validate using `FileListRequest` schema.
+*   **`utils.is_valid_directory(request_body.directory)`**: Checks if provided dir is valid.
+*   **`files = code_core.list_cpp_files(request_body.directory)`**: Calls the code module to do the directory search.
+*   **`return {"files": files}`**: Return files list in response.
+*   **`except Exception as e:`**: Catch the exception and raise HTTPException.
+
+**2. Create `backend/app/modules/code/core.py`:**
+
+```python
+import os
+from typing import List
+
+
+def list_cpp_files(directory: str) -> List[str]:
+    """
+    Lists C++ files in the given directory.
+
+    Args:
+        directory (str): The path of the directory to list files from.
+
+    Returns:
+        List[str]: A list of C++ file paths.
+    """
+    cpp_files = []
+    for root, _, files in os.walk(directory):
+        for file in files:
+            if file.lower().endswith((".cpp", ".h", ".hpp", ".c")):
+                file_path = os.path.join(root, file)
+                cpp_files.append(file_path)
+    return cpp_files
+```
+
+**Explanation:**
+
+*   **Imports**: Import the necessary module.
+*   **`def list_cpp_files(directory: str) -> List[str]:`**:
+    *   Defines the function.
+    *   `directory (str)`: Takes directory parameter as input.
+    *   `-> List[str]`: Defines output of type list of string
+*   **`cpp_files = []`**: Define an empty list to put matched files.
+*   **`for root, _, files in os.walk(directory):`**: Walks the given directory.
+*   **`for file in files:`**: Loops through the files
+*   **`if file.lower().endswith((".cpp", ".h", ".hpp", ".c")):`**: Check if the file is a c++ file or header file.
+*   **`file_path = os.path.join(root, file)`**: Join file name with root path.
+*   **`cpp_files.append(file_path)`**: Add file path to array
+*   **`return cpp_files`**: return list of found cpp file paths.
+
+**3. Create `backend/app/schemas/code.py`**
+
+```python
+from pydantic import BaseModel
+from typing import List
+
+
+class FileListRequest(BaseModel):
+    directory: str
+
+
+class FileListResponse(BaseModel):
+    files: List[str]
+```
+
+**Explanation:**
+
+*   **Imports:** Import the necessary modules
+*   **`class FileListRequest(BaseModel):`**:
+    *   Creates the pydantic class
+    *   `directory: str` : Defines a directory field of string type to be send in body request.
+*   **`class FileListResponse(BaseModel):`**:
+    *    Creates the pydantic class for response model
+    *   `files: List[str]`: Defines list of files as array of string that will be send back as response.
+
+**4. Create `backend/app/utils/utils.py`**
+```python
+import os
+
+
+def is_valid_directory(path: str) -> bool:
+    return os.path.isdir(path)
+```
+
+**Explanation:**
+
+*   **Imports:** import `os` module.
+*   **`def is_valid_directory(path: str) -> bool:`**: defines a function that check if the path is directory or not.
+
+**SvelteKit Frontend Changes (`frontend/src/routes/+page.svelte`):**
+
+```svelte
+<script lang="ts">
+    let files: string[] = [];
+    let directory = '';
+    let loading = false;
+    let errorMessage: string | null = null;
+
+    async function fetchFiles() {
+      loading = true;
+      errorMessage = null;
+        try {
+            const response = await fetch('/api/v1/code/list-files', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'true'
+                },
+                 body: JSON.stringify({ directory })
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.detail || 'Failed to fetch files');
+            }
+            const data = await response.json();
+            files = data.files;
+
+        } catch (error: any) {
+            errorMessage = error.message || 'An error occurred';
+            files = [];
+        } finally {
+            loading = false;
+        }
+    }
+
+</script>
+
+<h1>C++ Files</h1>
+<input type="text" placeholder="Directory Path" bind:value={directory}/>
+
+<button on:click={fetchFiles} disabled={loading}>
+    {#if loading}
+      Loading...
+     {:else}
+        List Files
+    {/if}
+</button>
+
+{#if errorMessage}
+    <p style="color: red">{errorMessage}</p>
+{/if}
+
+
+{#if files.length > 0}
+  <ul>
+    {#each files as file}
+      <li>{file}</li>
+    {/each}
+  </ul>
+{:else if !loading}
+  <p>No files found</p>
+{/if}
+```
+
+**Explanation:**
+
+*   **`let files: string[] = [];`**: To hold list of files from api.
+*   **`let directory = '';`**: Input text field value holder.
+*   **`let loading = false;`**: To handle loading state.
+*   **`let errorMessage: string | null = null;`**: To handle error messages.
+*   **`async function fetchFiles() { ... }`**:
+    *   Asynchronous function to fetch files from the API.
+    *   It calls the `"/api/v1/code/list-files"` POST endpoint, passes the directory from input field.
+    *   Handles successful and unsuccessful responses,
+    *    Error handling using `try/catch` block.
+    *   loading state management.
+*   **`<h1>C++ Files</h1>`**: Title of this page.
+*   **`<input type="text" placeholder="Directory Path" bind:value={directory}/>`**: Input text field, the value of field will update `directory` var.
+*   **`<button on:click={fetchFiles} disabled={loading}>`**: Button to trigger `fetchFiles` function, button is disabled when it's on loading state.
+*   **`{#if loading}...{:else}...{/if}`**: Load condition rendering based on loading state.
+*   **`{#if errorMessage} ... {/if}`**: Renders error message.
+*   **`{#if files.length > 0} ... {:else if !loading} ... {/if}`**: Renders list of files or no file found message, based on state.
+
+**Important Considerations:**
+
+*   **Directory Path:** Make sure you provide an absolute directory path (e.g., `/Users/yourusername/yourproject/cpp_code`) in the input field, the current path of your terminal can help you get your absolute path.
+*   **Security:** Be extremely cautious about the directories you allow users to access. Avoid exposing sensitive areas of your system.
+*   **Error Handling:** The code provides a basic error handling, but you may need to add further error handling, and validation.
+*   **CORS:** If your frontend and backend run on different ports, you will need to configure CORS in your backend.
+*   **Authentication:** You can use the authentication middleware as you want.
+*   **Type checking**: If you are working with typescript be sure to specify types for response and request.
+
+**How to Run:**
+
+1.  **Backend:** Run your FastAPI app using `python backend/app/main.py` (or `uvicorn app.main:app --reload`).
+2.  **Frontend:** Start your SvelteKit development server using `npm run dev` (from the `frontend` directory).
+3.  Open your browser and go to `http://localhost:5173`. You will see the input field. Insert a dir and click list files, you should see the list of your c++ file in that dir.
+
+Now you have a basic app that retrieves directory content and displays them on the frontend. You can extend this functionality to implement other LLM interaction features. Let me know if you need further assistance.
 
